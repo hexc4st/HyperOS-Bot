@@ -22,8 +22,10 @@ DISCORD_CLIENT_ID = os.getenv('DISCORD_CLIENT_ID', '123456789012345678') # Repla
 DISCORD_CLIENT_SECRET = os.getenv('DISCORD_CLIENT_SECRET', 'your_super_secret_client_secret') # Replace with your Discord Application Secret
 # IMPORTANT: This User ID must match the Discord ID of the user allowed to access the dashboard.
 DASHBOARD_ADMIN_USER_ID = os.getenv('DASHBOARD_ADMIN_USER_ID', '123456789012345678') 
-# The port must match the port the Flask app is running on (usually 5000 in environments like this)
-REDIRECT_URI = "http://127.0.0.1:5000/oauth_callback" 
+
+# === REDIRECT URI UPDATED FOR RENDER DEPLOYMENT ===
+# IMPORTANT: This URI MUST be registered in the Discord Developer Portal under OAuth2 -> Redirects.
+REDIRECT_URI = "https://hyperos-bot.onrender.com/oauth_callback" 
 DISCORD_API_BASE_URL = 'https://discord.com/api/v10'
 
 # Global variables for in-memory configuration cache
@@ -460,7 +462,7 @@ async def kick(interaction: discord.Interaction, member: discord.Member, reason:
         await bot._send_log_embed(log_embed)
 
     except Exception as e:
-        await interaction.followup.send(f"Error executing kick: {e}", ephemeral=True)
+        await interaction.followup.send(f"Error executing kick: {e}", ephemeral=True) 
 
 
 @bot.tree.command(name="warn", description="Issues a formal warning.")
@@ -679,12 +681,34 @@ def oauth_callback():
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     
     try:
-        response = requests.post(
-            f"{DISCORD_API_BASE_URL}/oauth2/token",
-            data=data,
-            headers=headers
-        )
-        response.raise_for_status() # Raise exception for bad status codes
+        # Set exponential backoff parameters
+        max_retries = 5
+        base_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    f"{DISCORD_API_BASE_URL}/oauth2/token",
+                    data=data,
+                    headers=headers
+                )
+                response.raise_for_status() # Raise exception for bad status codes
+                break # Success, exit loop
+            except requests.exceptions.HTTPError as e:
+                # Handle rate limiting (status code 429) or other retryable errors
+                if response.status_code == 429 or attempt == max_retries - 1:
+                    raise # Re-raise if it's the last attempt or unretryable
+                
+                delay = base_delay * (2 ** attempt)
+                time.sleep(delay)
+            except requests.exceptions.RequestException as e:
+                # Handle network issues
+                if attempt == max_retries - 1:
+                    raise
+                
+                delay = base_delay * (2 ** attempt)
+                time.sleep(delay)
+        
         token_info = response.json()
         access_token = token_info['access_token']
         
@@ -771,18 +795,18 @@ def update_config():
 
 def run_web_server():
     """Runs the Flask web server in a separate thread."""
+    # Render environments usually expose the port via an environment variable
     port = int(os.environ.get('PORT', 5000))
     # Flask requires a secret key for session management
     app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a_very_secret_key_for_hyperos') 
     
-    # Check if we are running in an environment where we need to override the Redirect URI host
-    if os.environ.get('CANVAS_HOST'):
-        global REDIRECT_URI
-        # Construct the redirect URI using the dynamically provided hostname
-        REDIRECT_URI = f"http://{os.environ['CANVAS_HOST']}:{port}/oauth_callback"
-        print(f"Overriding Redirect URI for Canvas: {REDIRECT_URI}")
-
-
+    # For a Render deployment, the web server needs to bind to 0.0.0.0, 
+    # and the redirect URI is expected to be the public URL (which we set above).
+    print(f"Web server starting with Redirect URI: {REDIRECT_URI}")
+    
+    # We ignore the CANVAS_HOST logic here since you specified a fixed Render URL.
+    
+    # In many hosting environments, running on 0.0.0.0 is necessary to be publicly accessible
     app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
