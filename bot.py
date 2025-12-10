@@ -547,6 +547,30 @@ def _get_or_create_webhook(channel_id):
     except Exception as e:
         raise Exception(f"Unexpected error during webhook creation: {e}")
 
+def _get_recent_messages(channel_id, limit=10):
+    """Fetches recent messages from a channel via REST API for conversational context."""
+    try:
+        response = requests.get(
+            f"{DISCORD_API_BASE_URL}/channels/{channel_id}/messages?limit={limit}",
+            headers=BOT_API_HEADERS
+        )
+        response.raise_for_status()
+        messages = response.json()
+        
+        # Simplify data for display, reversing order so oldest is first (more natural reading flow)
+        simplified_messages = [{
+            "author": msg['author']['username'],
+            "content": msg['content'],
+            "timestamp": msg['timestamp']
+        } for msg in messages]
+        return simplified_messages[::-1]
+    except HTTPError as e:
+        print(f"Error fetching messages for context: {e.response.status_code} - {e.response.text}")
+        return None
+    except Exception as e:
+        print(f"Unexpected error fetching messages: {e}")
+        return None
+
 
 # --- TEMPLATES (Login omitted for brevity, it is unchanged) ---
 
@@ -566,6 +590,10 @@ DASHBOARD_TEMPLATE = """
         .input-style { @apply w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:ring-indigo-500 focus:border-indigo-500 transition duration-150; }
         .btn-primary { @apply w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300 shadow-md hover:shadow-lg mt-4; }
         .btn-danger { @apply w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition duration-300 shadow-md hover:shadow-lg mt-4; }
+        .message-context { @apply p-3 bg-gray-900 border border-gray-700 rounded-lg max-h-48 overflow-y-auto mb-4; }
+        .message-item { @apply border-b border-gray-800 py-1 last:border-b-0 text-sm; }
+        .message-author { @apply font-semibold text-indigo-400; }
+        .message-content { @apply text-gray-300 break-words; }
     </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen p-8">
@@ -658,14 +686,36 @@ DASHBOARD_TEMPLATE = """
             <!-- 4. SEND MESSAGE (IMPERSONATION) -->
             <div class="grid-card">
                 <h2 class="form-heading">🗣️ Send Message (Webhook Impersonation)</h2>
-                <p class="text-gray-400 text-sm mb-4">Send a message that appears to be from a custom user/avatar.</p>
-                <form method="POST" action="{{ url_for('api_send_message') }}">
-                    <label class="block text-sm font-medium text-gray-300 mb-2">Target Channel</label>
-                    <select name="channel_id" required class="input-style mb-4">
+                <p class="text-gray-400 text-sm mb-2">Send a message that appears to be from a custom user/avatar. (Message Context below)</p>
+                
+                <!-- CONTEXT SELECTION FORM -->
+                <form method="GET" action="{{ url_for('dashboard') }}" id="context-form" class="mb-4">
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Channel for Context & Message</label>
+                    <select name="context_channel_id" onchange="document.getElementById('context-form').submit()" class="input-style">
                         {% for channel in channels %}
-                        <option value="{{ channel.id }}">#{{ channel.name }} ({{ channel.id }})</option>
+                        <option value="{{ channel.id }}" {% if channel.id == context_channel_id %}selected{% endif %}>#{{ channel.name }} ({{ channel.id }})</option>
                         {% endfor %}
                     </select>
+                </form>
+
+                <!-- MESSAGE CONTEXT PANEL -->
+                <div class="message-context">
+                    <h3 class="text-sm font-bold text-gray-400 mb-2">Recent Messages in #{{ channels | selectattr('id', 'equalto', context_channel_id) | first | default({'name': 'Loading'}) | attr('name') }}</h3>
+                    {% if recent_messages %}
+                        {% for message in recent_messages %}
+                            <div class="message-item">
+                                <span class="message-author">{{ message.author }}:</span> 
+                                <span class="message-content">{{ message.content }}</span>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <p class="text-gray-500 text-xs">Could not load messages. Check bot's read permissions.</p>
+                    {% endif %}
+                </div>
+                
+                <!-- WEBHOOK SEND FORM -->
+                <form method="POST" action="{{ url_for('api_send_message') }}">
+                    <input type="hidden" name="channel_id" value="{{ context_channel_id }}">
                     
                     <label class="block text-sm font-medium text-gray-300 mb-2">Impersonated Username (Optional)</label>
                     <input type="text" name="username" placeholder="Leave blank for bot's name" class="input-style mb-4">
@@ -719,11 +769,14 @@ DASHBOARD_TEMPLATE = """
                 <p class="mb-4 text-gray-400 text-sm">All settings reset on bot restart.</p>
                 
                 <form method="POST" action="{{ url_for('api_update_config') }}">
-                    <label class="block text-sm font-medium text-gray-300 mb-2">Log Channel ID</label>
-                    <input type="text" name="log_channel_id" value="{{ current_log_id or '' }}"
-                           class="input-style mb-4"
-                           placeholder="Enter a 18-digit Discord Channel ID">
-                    <p class="mt-2 text-xs text-gray-500">Current Log: <span class="font-mono text-indigo-300">{{ current_log_id or 'Not Set' }}</span></p>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">Log Channel</label>
+                    <select name="log_channel_id" class="input-style mb-4">
+                        <option value="">-- Select Log Channel --</option>
+                        {% for channel in channels %}
+                        <option value="{{ channel.id }}" {% if channel.id == current_log_id %}selected{% endif %}>#{{ channel.name }} ({{ channel.id }})</option>
+                        {% endfor %}
+                    </select>
+                    <p class="mt-2 text-xs text-gray-500">Current Log ID: <span class="font-mono text-indigo-300">{{ current_log_id or 'Not Set' }}</span></p>
                     
                     <label class="block text-sm font-medium text-gray-300 mb-2 mt-6">Word Filter List (Comma Separated)</label>
                     <textarea name="word_filter_list" rows="3" class="input-style mb-4"
@@ -874,10 +927,22 @@ def home():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    """Displays the bot configuration dashboard, fetching channels dynamically."""
+    """Displays the bot configuration dashboard, fetching channels and message context dynamically."""
     
     # Fetch channels for dropdowns
     channels = _get_guild_channels()
+    
+    # Handle context channel selection for the webhook panel
+    # We use a query parameter to persist the context selection
+    context_channel_id = request.args.get('context_channel_id')
+    recent_messages = None
+    
+    # Default context channel: use the ID of the first channel if none is set
+    if not context_channel_id and channels:
+        context_channel_id = channels[0]['id']
+        
+    if context_channel_id:
+        recent_messages = _get_recent_messages(context_channel_id)
     
     config = CONFIG_CACHE.get(GUILD_ID, {})
     log_id = config.get('log_channel_id', None)
@@ -898,7 +963,9 @@ def dashboard():
         status=status,
         error=error,
         user_id=user_id,
-        channels=channels
+        channels=channels,
+        recent_messages=recent_messages,
+        context_channel_id=context_channel_id # Pass selected ID back to template
     )
 
 # --- 4. DASHBOARD API ENDPOINTS (Direct Discord API Interactions) ---
@@ -922,7 +989,7 @@ def api_update_config():
     new_log_id_str = request.form.get('log_channel_id', '').strip()
     word_filter_raw = request.form.get('word_filter_list', '').strip()
 
-    # Log Channel validation
+    # Log Channel validation (optional check, as dropdown enforces valid IDs)
     if new_log_id_str and not new_log_id_str.isdigit():
         return redirect(url_for('dashboard', error="Log Channel ID must be a number (the 18-digit Discord Channel ID)."))
     
@@ -1154,7 +1221,8 @@ def api_send_message():
             json=payload
         ).raise_for_status()
         
-        return redirect(url_for('dashboard', status=f"Impersonated message successfully sent to channel {channel_id}."))
+        # Redirect, but keep the current context channel selected
+        return redirect(url_for('dashboard', status=f"Impersonated message successfully sent to channel {channel_id}.", context_channel_id=channel_id))
 
     except HTTPError as e:
         return handle_api_error(e)
