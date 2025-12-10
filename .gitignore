@@ -1,0 +1,8 @@
+# Ignore Python Virtual Environments
+venv/
+.venv/
+
+# Ignore sensitive configuration files (where your bot token is stored)
+.env
+config.ini
+secrets.py
