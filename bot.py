@@ -196,6 +196,8 @@ async def os_ban(interaction: discord.Interaction, member: discord.Member, reaso
         return
         
     ban_successful = False
+    db_status = "and recorded in HyperOS DB." # Default success message
+    
     try:
         # 1. Execute Discord Ban
         await member.ban(reason=reason)
@@ -212,10 +214,13 @@ async def os_ban(interaction: discord.Interaction, member: discord.Member, reaso
                 'timestamp': firestore.SERVER_TIMESTAMP,
                 'type': 'os_ban'
             }
-            # Collection name based on project ID for context
-            # Note: add() is synchronous here, we use await to ensure it completes before proceeding
-            await db.collection('hyperos-samcly-bans').add(ban_data)
-            db_status = "and recorded in HyperOS DB."
+            # CRITICAL FIX: Use asyncio.to_thread to run the synchronous Firestore call 
+            # without blocking the async Discord event loop.
+            try:
+                await asyncio.to_thread(db.collection('hyperos-samcly-bans').add, ban_data)
+            except Exception as db_e:
+                print(f"Error recording ban to Firestore: {db_e}")
+                db_status = f"but database logging failed (Error: {db_e})."
         else:
             db_status = "but database logging failed (DB not initialized)."
 
@@ -256,7 +261,8 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
         await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
         return
     
-    await interaction.followup.send(f"⚠️ **Warning Issued:** {member.mention} has received a formal warning.\nReason: *{reason}*")
+    await interaction.followup.send(f"⚠️ **Warning Issued:** {member.mention} has received a formal warning.\nReason: *{reason}*"
+)
 
 
 @bot.tree.command(name="addrole", description="Assigns a role to a member.")
@@ -287,10 +293,13 @@ async def send_as_bot(interaction: discord.Interaction, message: str):
         return
 
     try:
+        # Execution is immediate after deferral, leveraging the 15-minute window for spin-up time.
+        
         # Send the user's message as the bot
         await interaction.channel.send(message)
-        # Confirm action to the moderator ephemerally
-        await interaction.followup.send("✅ Message sent successfully.", ephemeral=True)
+        # Confirm action to the moderator ephemerally. The success of this send confirms the bot executed 
+        # the action within the 15-minute followup window.
+        await interaction.followup.send("✅ Message sent successfully, utilizing Discord's 15-minute follow-up window.", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"Error sending message: {e}", ephemeral=True)
 
