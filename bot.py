@@ -323,7 +323,7 @@ if __name__ == "__main__":
             
             # Initialize the Firebase App using the Service Account Credentials
             firebase_admin.initialize_app(cred)
-            global db
+            # Removed: global db # This was causing the SyntaxError
             db = firestore.client()
             print("✅ Firebase initialized successfully.")
         else:
