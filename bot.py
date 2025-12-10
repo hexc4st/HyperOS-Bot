@@ -4,14 +4,19 @@ import asyncio
 from datetime import timedelta
 import time
 import os
+import json # Added for handling Firebase JSON credentials
 from flask import Flask
 import threading
+
+# Firebase Imports
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
 
 # --- 1. CONFIGURATION ---
 # IMPORTANT: Use environment variables for sensitive data in production.
 # ------------------------------------------------------------------
 # 1. BOT_TOKEN: Fetched securely from the system's environment variables (e.g., set on Render).
-# Ensure you set the name 'DISCORD_TOKEN' in the Render environment variables.
 BOT_TOKEN = os.getenv('DISCORD_TOKEN')
 
 # 2. GUILD_ID: The ID of your server ("HyperOS").
@@ -19,6 +24,9 @@ GUILD_ID = 1448175320531468402
 
 # 3. MOD_ROLE_ID: The ID of the role allowed to use moderation commands.
 MOD_ROLE_ID = 1448175664795746398 
+
+# Global variable for Firestore client
+db = None
 
 # Define the custom Bot class
 class HyperOSBot(discord.Client):
@@ -176,6 +184,50 @@ async def perm_ban(interaction: discord.Interaction, member: discord.Member, rea
         await interaction.followup.send(f"Error executing ban: {e}", ephemeral=True) 
 
 
+@bot.tree.command(name="osban", description="Permanently bans a user and records the ban in the HyperOS database.")
+@app_commands.describe(reason="Reason for ban")
+@app_commands.checks.has_permissions(ban_members=True)
+async def os_ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided."):
+    # Defer first to prevent timeout
+    await interaction.response.defer(ephemeral=False)
+
+    if not is_moderator(interaction):
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
+        return
+        
+    ban_successful = False
+    try:
+        # 1. Execute Discord Ban
+        await member.ban(reason=reason)
+        ban_successful = True
+        
+        # 2. Record Ban in Firestore (if initialized)
+        if db:
+            ban_data = {
+                'user_id': str(member.id),
+                'user_name': member.name,
+                'moderator_id': str(interaction.user.id),
+                'moderator_name': interaction.user.name,
+                'reason': reason,
+                'timestamp': firestore.SERVER_TIMESTAMP,
+                'type': 'os_ban'
+            }
+            # Collection name based on project ID for context
+            await db.collection('hyperos-samcly-bans').add(ban_data)
+            db_status = "and recorded in HyperOS DB."
+        else:
+            db_status = "but database logging failed (DB not initialized)."
+
+        await interaction.followup.send(f"🚫 **HyperOS Ban:** {member.display_name} has been permanently removed {db_status}\nReason: *{reason}*")
+        
+    except Exception as e:
+        if ban_successful:
+             # Ban occurred on Discord but DB failed, send partial success message
+             await interaction.followup.send(f"⚠️ **Warning:** Ban executed on Discord, but database logging failed: {e}", ephemeral=True)
+        else:
+             # Ban failed completely
+             await interaction.followup.send(f"Error executing ban: {e}", ephemeral=True)
+
 @bot.tree.command(name="kick", description="Kicks a user from the server.")
 @app_commands.checks.has_permissions(kick_members=True)
 async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided."):
@@ -258,6 +310,29 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port)
 
 if __name__ == "__main__":
+    
+    # --- 6. FIREBASE SETUP ---
+    # Global variable 'db' will be set here.
+    try:
+        # Load credentials from a secure environment variable (JSON string)
+        creds_json_string = os.getenv('FIREBASE_CREDENTIALS_JSON')
+        if creds_json_string:
+            # We use json.loads to convert the environment variable string back into a Python dictionary
+            cred_dict = json.loads(creds_json_string)
+            cred = credentials.Certificate(cred_dict)
+            
+            # Initialize the Firebase App using the Service Account Credentials
+            firebase_admin.initialize_app(cred)
+            global db
+            db = firestore.client()
+            print("✅ Firebase initialized successfully.")
+        else:
+            print("⚠️ FIREBASE_CREDENTIALS_JSON environment variable not found. Firebase features will be unavailable.")
+            # db remains None
+    except Exception as e:
+        print(f"❌ Error initializing Firebase: {e}")
+        # db remains None
+
     if BOT_TOKEN is None:
         print("ERROR: BOT_TOKEN not found. Please set the 'DISCORD_TOKEN' environment variable.")
     else:
