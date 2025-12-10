@@ -88,17 +88,20 @@ def duration_to_seconds(duration: int, unit: str) -> int:
 
 # --- 5. SLASH COMMANDS ---
 
-@bot.tree.command(name="temp_mute", description="Mutes a user by deleting their messages (Silent).")
+@bot.tree.command(name="tempmute", description="Mutes a user by deleting their messages (Silent).")
 @app_commands.describe(duration="Length of mute", unit="minutes/hours/days", reason="Reason for mute")
 @app_commands.checks.has_permissions(moderate_members=True) 
 async def temp_mute(interaction: discord.Interaction, member: discord.Member, duration: int, unit: str, reason: str = "No reason provided."):
+    # Defer first to prevent timeout
+    await interaction.response.defer(ephemeral=False) 
+
     if not is_moderator(interaction):
-        await interaction.response.send_message("❌ Moderator role required.", ephemeral=True)
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
         return
 
     seconds = duration_to_seconds(duration, unit)
     if seconds <= 0:
-        await interaction.response.send_message("❌ Invalid duration.", ephemeral=True)
+        await interaction.followup.send("❌ Invalid duration.", ephemeral=True)
         return
 
     unmute_timestamp = time.time() + seconds
@@ -108,8 +111,7 @@ async def temp_mute(interaction: discord.Interaction, member: discord.Member, du
     
     unmute_dt = discord.utils.format_dt(discord.Object(round(unmute_timestamp)), 'R')
     
-    # RESPONSE IS NOW PUBLIC
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"🔇 **Mute Action:** {member.mention} has been muted for **{duration} {unit}** (until {unmute_dt}).\n"
         f"Reason: *{reason}*"
     )
@@ -117,77 +119,127 @@ async def temp_mute(interaction: discord.Interaction, member: discord.Member, du
 @bot.tree.command(name="unmute", description="Manually unmutes a user.")
 @app_commands.checks.has_permissions(moderate_members=True)
 async def unmute(interaction: discord.Interaction, member: discord.Member):
+    # Defer first to prevent timeout
+    await interaction.response.defer(ephemeral=False)
+
     if not is_moderator(interaction):
-        await interaction.response.send_message("❌ Moderator role required.", ephemeral=True)
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
         return
 
     if member.id in bot.muted_users:
         del bot.muted_users[member.id]
-        # RESPONSE IS NOW PUBLIC
-        await interaction.response.send_message(f"✅ **Unmute Action:** {member.mention} has been manually unmuted. They can now speak again.")
+        await interaction.followup.send(f"✅ **Unmute Action:** {member.mention} has been manually unmuted. They can now speak again.")
     else:
-        await interaction.response.send_message(f"ℹ️ **{member.display_name}** is not currently muted.", ephemeral=True) # Keep this informational message ephemeral
+        await interaction.followup.send(f"ℹ️ **{member.display_name}** is not currently muted.", ephemeral=True) 
 
 # --- STANDARD MOD COMMANDS ---
 
-@bot.tree.command(name="temp_ban", description="Temporarily bans a user.")
+@bot.tree.command(name="tempban", description="Temporarily bans a user.")
 @app_commands.checks.has_permissions(ban_members=True)
 async def temp_ban(interaction: discord.Interaction, member: discord.Member, duration: int, unit: str, reason: str = "No reason provided."):
+    # Defer first to prevent timeout
+    await interaction.response.defer(ephemeral=False)
+    
     if not is_moderator(interaction):
-        await interaction.response.send_message("❌ Moderator role required.", ephemeral=True)
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
         return
     
     seconds = duration_to_seconds(duration, unit)
     
-    # DEFER IS NOW PUBLIC
-    await interaction.response.defer()
-    
     try:
         await member.ban(reason=f"Temp Ban: {reason}")
-        # RESPONSE IS NOW PUBLIC
         await interaction.followup.send(f"🔨 **Temporary Ban:** {member.display_name} has been banned for {duration} {unit}.\nReason: *{reason}*")
         
         # Unban process in the background
         await asyncio.sleep(seconds)
-        await interaction.guild.unban(member, reason="Temp ban expired")
+        # Fetch the user object again for unbanning
+        user = discord.Object(id=member.id)
+        await interaction.guild.unban(user, reason="Temp ban expired")
     except Exception as e:
-        await interaction.followup.send(f"Error executing ban: {e}", ephemeral=True) # Keep error private
+        await interaction.followup.send(f"Error executing ban: {e}", ephemeral=True) 
 
-@bot.tree.command(name="perm_ban", description="Permanently bans a user.")
+
+@bot.tree.command(name="permban", description="Permanently bans a user.")
 @app_commands.checks.has_permissions(ban_members=True)
 async def perm_ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided."):
+    # Defer first to prevent timeout
+    await interaction.response.defer(ephemeral=False)
+
     if not is_moderator(interaction):
-        await interaction.response.send_message("❌ Moderator role required.", ephemeral=True)
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
         return
+        
     try:
         await member.ban(reason=reason)
-        # RESPONSE IS NOW PUBLIC
-        await interaction.response.send_message(f"🚫 **Permanent Ban:** {member.display_name} has been permanently removed from the server.\nReason: *{reason}*")
+        await interaction.followup.send(f"🚫 **Permanent Ban:** {member.display_name} has been permanently removed from the server.\nReason: *{reason}*")
     except Exception as e:
-        await interaction.response.send_message(f"Error executing ban: {e}", ephemeral=True) # Keep error private
+        await interaction.followup.send(f"Error executing ban: {e}", ephemeral=True) 
+
+
+@bot.tree.command(name="kick", description="Kicks a user from the server.")
+@app_commands.checks.has_permissions(kick_members=True)
+async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided."):
+    # Defer first to prevent timeout
+    await interaction.response.defer(ephemeral=False)
+    
+    if not is_moderator(interaction):
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
+        return
+        
+    try:
+        await member.kick(reason=reason)
+        await interaction.followup.send(f"👢 **Kick Action:** {member.display_name} has been kicked from the server.\nReason: *{reason}*")
+    except Exception as e:
+        await interaction.followup.send(f"Error executing kick: {e}", ephemeral=True)
+
 
 @bot.tree.command(name="warn", description="Issues a formal warning.")
 @app_commands.checks.has_permissions(moderate_members=True)
 async def warn(interaction: discord.Interaction, member: discord.Member, reason: str):
+    # Defer first to prevent timeout
+    await interaction.response.defer(ephemeral=False)
+
     if not is_moderator(interaction):
-        await interaction.response.send_message("❌ Moderator role required.", ephemeral=True)
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
         return
     
-    # RESPONSE IS NOW PUBLIC
-    await interaction.response.send_message(f"⚠️ **Warning Issued:** {member.mention} has received a formal warning.\nReason: *{reason}*")
+    await interaction.followup.send(f"⚠️ **Warning Issued:** {member.mention} has received a formal warning.\nReason: *{reason}*")
 
-@bot.tree.command(name="add_dynamic_role", description="Assigns a role.")
+
+@bot.tree.command(name="addrole", description="Assigns a role to a member.")
 @app_commands.checks.has_permissions(manage_roles=True)
 async def add_dynamic_role(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    # Defer first to prevent timeout
+    await interaction.response.defer(ephemeral=False)
+
     if not is_moderator(interaction):
-        await interaction.response.send_message("❌ Moderator role required.", ephemeral=True)
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
         return
+        
     try:
         await member.add_roles(role)
-        # RESPONSE IS NOW PUBLIC
-        await interaction.response.send_message(f"✨ **Role Assignment:** Granted **{role.name}** role to {member.mention}.")
+        await interaction.followup.send(f"✨ **Role Assignment:** Granted **{role.name}** role to {member.mention}.")
     except Exception as e:
-        await interaction.response.send_message(f"Error: {e}", ephemeral=True) # Keep error private
+        await interaction.followup.send(f"Error: {e}", ephemeral=True) 
+
+
+@bot.tree.command(name="sendasbot", description="Sends a message in the current channel as the bot.")
+@app_commands.describe(message="The message content to send.")
+async def send_as_bot(interaction: discord.Interaction, message: str):
+    # Defer ephemerally since the actual output is the public message
+    await interaction.response.defer(ephemeral=True) 
+
+    if not is_moderator(interaction):
+        await interaction.followup.send("❌ Moderator role required.", ephemeral=True)
+        return
+
+    try:
+        # Send the user's message as the bot
+        await interaction.channel.send(message)
+        # Confirm action to the moderator ephemerally
+        await interaction.followup.send("✅ Message sent successfully.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Error sending message: {e}", ephemeral=True)
 
 # --- RENDER HEALTH CHECK ---
 
