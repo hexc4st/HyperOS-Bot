@@ -4,6 +4,8 @@ import asyncio
 from datetime import timedelta
 import time
 import os
+from flask import Flask
+import threading
 
 # --- 1. CONFIGURATION ---
 # IMPORTANT: Use environment variables for sensitive data in production.
@@ -187,8 +189,31 @@ async def add_dynamic_role(interaction: discord.Interaction, member: discord.Mem
     except Exception as e:
         await interaction.response.send_message(f"Error: {e}", ephemeral=True) # Keep error private
 
+# --- RENDER HEALTH CHECK ---
+
+# Flask app setup
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    """Simple health check endpoint."""
+    return 'HyperOS Bot is running and healthy!', 200
+
+def run_web_server():
+    """Runs the Flask web server in a separate thread."""
+    port = int(os.environ.get('PORT', 5000))
+    # Note: host='0.0.0.0' is required for Render to bind correctly
+    app.run(host='0.0.0.0', port=port)
+
 if __name__ == "__main__":
     if BOT_TOKEN is None:
         print("ERROR: BOT_TOKEN not found. Please set the 'DISCORD_TOKEN' environment variable.")
     else:
+        # 1. Start the Flask server in a background thread to satisfy Render's health check
+        server_thread = threading.Thread(target=run_web_server)
+        server_thread.daemon = True # Allows the main program to exit even if the thread is running
+        server_thread.start()
+        print(f"Web server started on port {os.environ.get('PORT', 5000)} for Render health check.")
+
+        # 2. Run the Discord bot in the main thread (blocking call)
         bot.run(BOT_TOKEN)
