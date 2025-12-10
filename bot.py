@@ -213,6 +213,7 @@ async def os_ban(interaction: discord.Interaction, member: discord.Member, reaso
                 'type': 'os_ban'
             }
             # Collection name based on project ID for context
+            # Note: add() is synchronous here, we use await to ensure it completes before proceeding
             await db.collection('hyperos-samcly-bans').add(ban_data)
             db_status = "and recorded in HyperOS DB."
         else:
@@ -316,21 +317,27 @@ if __name__ == "__main__":
     try:
         # Load credentials from a secure environment variable (JSON string)
         creds_json_string = os.getenv('FIREBASE_CREDENTIALS_JSON')
+        
         if creds_json_string:
-            # We use json.loads to convert the environment variable string back into a Python dictionary
-            cred_dict = json.loads(creds_json_string)
-            cred = credentials.Certificate(cred_dict)
-            
-            # Initialize the Firebase App using the Service Account Credentials
-            firebase_admin.initialize_app(cred)
-            # Removed: global db # This was causing the SyntaxError
-            db = firestore.client()
-            print("✅ Firebase initialized successfully.")
+            try:
+                # 1. Attempt to parse the JSON string
+                cred_dict = json.loads(creds_json_string)
+                cred = credentials.Certificate(cred_dict)
+                
+                # 2. Initialize the Firebase App using the Service Account Credentials
+                firebase_admin.initialize_app(cred)
+                db = firestore.client()
+                print("✅ Firebase initialized successfully.")
+            except json.JSONDecodeError as e:
+                print(f"❌ Error decoding JSON credentials (Check FIREBASE_CREDENTIALS_JSON value in Render): {e}")
+            except Exception as e:
+                print(f"❌ Error initializing Firebase: {e}")
         else:
             print("⚠️ FIREBASE_CREDENTIALS_JSON environment variable not found. Firebase features will be unavailable.")
             # db remains None
     except Exception as e:
-        print(f"❌ Error initializing Firebase: {e}")
+        # Catch any remaining top-level exceptions during setup
+        print(f"❌ Uncaught Error during Firebase Setup: {e}")
         # db remains None
 
     if BOT_TOKEN is None:
