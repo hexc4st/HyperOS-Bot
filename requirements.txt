@@ -1,2 +1,3 @@
 discord.py
 flask
+firebase-admin
